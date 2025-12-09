@@ -130,7 +130,7 @@ The `"main_llm"` resource key is a convention between the agent and [VERL][agent
 - **Dataset** – Spider questions + schemas + ground-truth SQL are converted to Parquet (`train_spider.parquet`, `test_dev_500.parquet`, `test_dev.parquet`) and loaded into the store via [`Trainer.fit`][agentlightning.Trainer.fit].
 - **Loop** – The LangGraph agent iterates `write → execute → check → rewrite` until success or `max_turns` is hit.
 - **Reward** – `evaluate_query` runs the model’s SQL against the database and compares execution results with the golden query; equivalence yields a high reward, failures yield low or zero.
-- **RL signal path** – The numeric reward returned from `rollout` is forwarded to VERL, which applies GRPO over groups of rollouts (group size = [`rollout.n`](#configuring-verl-for-reinforcement-learning)) to update the policy.
+- **RL signal path** – The numeric reward returned from `rollout` is forwarded to VERL, which applies GRPO over groups of rollouts (group size = `actor_rollout_ref.rollout.n`; see [Configuring VERL for Reinforcement Learning](#configuring-verl-for-reinforcement-learning)) to update the policy.
 
 ## Reward Signal and Evaluation
 
@@ -234,7 +234,14 @@ GRPO consumes batches of rollouts grouped by `actor_rollout_ref.rollout.n` (e.g.
 - **Self-consistency or majority voting** – When no ground truth exists, sample multiple candidates, have a judge pick the best, and assign +1 to the winner and 0 (or a small penalty) to others in the group; GRPO’s relative advantages benefit from this structure.
 - **Safety/format gates** – Apply negative rewards for unsafe content, SQL injection patterns, or invalid formats before scoring semantic correctness. This keeps training stable by filtering obviously bad traces.
 
-For open-ended QA tasks, a lightweight judge prompt typically includes: (1) the task definition and acceptance criteria, (2) optional references or exemplar answers, (3) a 0–1 scoring scale with named anchors (e.g., 1.0 = fully correct, 0.5 = partially correct, 0.0 = incorrect/off-topic), and (4) a short rationale field to debug grading drift. The numeric score becomes the rollout reward with optional temperature-based smoothing (e.g., `reward = max(0.0, min(1.0, score))`).
+For open-ended QA tasks, a lightweight judge prompt typically includes:
+
+- the task definition and acceptance criteria,
+- optional references or exemplar answers,
+- a 0–1 scoring scale with named anchors (e.g., 1.0 = fully correct, 0.5 = partially correct, 0.0 = incorrect/off-topic),
+- a short rationale field to debug grading drift.
+
+The numeric score becomes the rollout reward with optional temperature-based smoothing (e.g., `reward = max(0.0, min(1.0, score))`).
 
 ## Orchestrating Training with [`Trainer`][agentlightning.Trainer]
 
