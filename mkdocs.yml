@@ -118,6 +118,7 @@ nav:
     - Bird's Eye View: deep-dive/birds-eye-view.md
     - Understanding Store: deep-dive/store.md
     - Serving LLM: deep-dive/serving-llm.md
+    - Training & GRPO (中文): deep-dive/training-and-grpo-cn.md
   - API References:
     - Agent: reference/agent.md
     - Algorithm: reference/algorithm.md
