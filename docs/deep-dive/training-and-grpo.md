@@ -763,6 +763,166 @@ For open-ended answer scenarios:
    - Adjust evaluation strategy based on training results
    - Pay attention to evaluator bias and limitations
 
+### Practical Guide: Implementing Reward Functions for Open-Ended Scenarios in GRPO Training
+
+Here's a complete example showing how to implement reward functions for open-ended Q&A tasks in GRPO training:
+
+```python
+import agentlightning as agl
+from typing import Dict, Any
+import numpy as np
+from openai import OpenAI
+
+class OpenEndedQAAgent(agl.LitAgent[Dict[str, Any]]):
+    """Open-ended Q&A Agent trained with GRPO"""
+    
+    def __init__(self):
+        super().__init__()
+        self.embedding_client = OpenAI()  # For semantic similarity
+    
+    def rollout(
+        self,
+        task: Dict[str, Any],
+        resources: agl.NamedResources,
+        rollout: agl.Rollout,
+    ) -> float:
+        """Execute one rollout and return reward"""
+        
+        # 1. Get LLM resource and generate answer
+        llm = resources["main_llm"]
+        question = task["question"]
+        
+        # Simplified for demonstration - use your actual agent logic
+        # answer = your_agent_logic(question, llm)
+        answer = "Agent generated answer..."  # Placeholder
+        
+        # 2. Calculate reward (using deterministic methods)
+        reward = self._compute_reward(
+            answer=answer,
+            reference=task["reference_answer"],
+            question=question
+        )
+        
+        # 3. Return reward to GRPO algorithm
+        return reward
+    
+    def _compute_reward(
+        self,
+        answer: str,
+        reference: str,
+        question: str
+    ) -> float:
+        """
+        Calculate reward for open-ended answers
+        Recommended to use deterministic methods for fast, stable training
+        """
+        
+        # Method 1: F1 score (recommended for Q&A)
+        f1_score = self._compute_f1(answer, reference)
+        
+        # Method 2: Embedding similarity (recommended for semantic evaluation)
+        embedding_similarity = self._compute_embedding_similarity(answer, reference)
+        
+        # Method 3: Combine multiple metrics
+        # Weights can be adjusted based on task
+        final_reward = (
+            f1_score * 0.4 +
+            embedding_similarity * 0.6
+        )
+        
+        return final_reward
+    
+    def _compute_f1(self, prediction: str, ground_truth: str) -> float:
+        """Calculate F1 score (token level)"""
+        pred_tokens = set(prediction.lower().split())
+        truth_tokens = set(ground_truth.lower().split())
+        
+        if len(pred_tokens) == 0 or len(truth_tokens) == 0:
+            return 0.0
+        
+        common = pred_tokens & truth_tokens
+        if len(common) == 0:
+            return 0.0
+        
+        precision = len(common) / len(pred_tokens)
+        recall = len(common) / len(truth_tokens)
+        f1 = 2 * precision * recall / (precision + recall)
+        
+        return f1
+    
+    def _compute_embedding_similarity(
+        self,
+        answer: str,
+        reference: str
+    ) -> float:
+        """Calculate semantic similarity (using embedding model)"""
+        try:
+            # Get embeddings
+            answer_emb = self.embedding_client.embeddings.create(
+                input=answer,
+                model="text-embedding-ada-002"
+            ).data[0].embedding
+            
+            reference_emb = self.embedding_client.embeddings.create(
+                input=reference,
+                model="text-embedding-ada-002"
+            ).data[0].embedding
+            
+            # Calculate cosine similarity
+            similarity = np.dot(answer_emb, reference_emb) / (
+                np.linalg.norm(answer_emb) * np.linalg.norm(reference_emb)
+            )
+            
+            # Normalize to 0-1
+            return (similarity + 1) / 2
+        except Exception as e:
+            # Fallback to F1 if embedding API fails
+            return self._compute_f1(answer, reference)
+
+# Configure GRPO training
+config = {
+    "algorithm": {
+        "adv_estimator": "grpo",
+        "use_kl_in_reward": False,
+    },
+    "actor_rollout_ref": {
+        "rollout": {
+            "n": 4,  # GRPO group size
+        },
+        # ... other configs
+    }
+}
+
+# Start training
+agent = OpenEndedQAAgent()
+algorithm = agl.VERL(config)
+trainer = agl.Trainer(n_runners=10, algorithm=algorithm)
+trainer.fit(agent, train_dataset=train_data, val_dataset=val_data)
+```
+
+**Key Points**:
+
+1. **Avoid Using LLM-as-a-Judge in GRPO Training**:
+   - LLM calls are expensive and slow
+   - May introduce instability and bias
+   - Recommended for APO or post-training evaluation
+
+2. **Recommended Deterministic Evaluation Methods**:
+   - **F1 Score**: Suitable for Q&A, text matching tasks
+   - **Embedding Similarity**: Suitable for semantic evaluation, relatively fast
+   - **ROUGE/BLEU**: Suitable for summarization, translation tasks
+   - **Combined Metrics**: Combine multiple metrics for comprehensive evaluation
+
+3. **Performance Considerations**:
+   - Embedding API calls can be batched for speed
+   - Cache embeddings for frequently used reference answers
+   - For large-scale training, consider local embedding model deployment
+
+4. **If You Really Need LLM-as-a-Judge**:
+   - Consider filtering with deterministic methods first, then using LLM to evaluate top N% samples
+   - Or train a small discriminator model to replace LLM
+   - Or use in APO phase rather than GRPO phase
+
 ---
 
 ## Training Highlights Summary

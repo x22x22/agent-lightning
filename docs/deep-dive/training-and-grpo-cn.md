@@ -865,6 +865,166 @@ def summarization_reward(document: str, summary: str, reference: str) -> float:
    - 根据训练结果调整评估策略
    - 关注评估器的偏差和局限性
 
+### 在 GRPO 训练中实现开放式答案奖励函数的实践指南
+
+下面是一个完整的示例，展示如何在 GRPO 训练中为开放式问答任务实现奖励函数：
+
+```python
+import agentlightning as agl
+from typing import Dict, Any
+import numpy as np
+from openai import OpenAI
+
+class OpenEndedQAAgent(agl.LitAgent[Dict[str, Any]]):
+    """开放式问答 Agent，使用 GRPO 训练"""
+    
+    def __init__(self):
+        super().__init__()
+        self.embedding_client = OpenAI()  # 用于计算语义相似度
+    
+    def rollout(
+        self,
+        task: Dict[str, Any],
+        resources: agl.NamedResources,
+        rollout: agl.Rollout,
+    ) -> float:
+        """执行一次 rollout 并返回奖励"""
+        
+        # 1. 获取 LLM 资源并生成答案
+        llm = resources["main_llm"]
+        question = task["question"]
+        
+        # 这里简化展示，实际应该调用你的 Agent 逻辑
+        # answer = your_agent_logic(question, llm)
+        answer = "Agent 生成的答案..."  # 占位符
+        
+        # 2. 计算奖励（使用确定性方法）
+        reward = self._compute_reward(
+            answer=answer,
+            reference=task["reference_answer"],
+            question=question
+        )
+        
+        # 3. 返回奖励给 GRPO 算法
+        return reward
+    
+    def _compute_reward(
+        self,
+        answer: str,
+        reference: str,
+        question: str
+    ) -> float:
+        """
+        为开放式答案计算奖励
+        推荐使用确定性方法，以便快速、稳定地训练
+        """
+        
+        # 方法 1：F1 分数（推荐用于问答）
+        f1_score = self._compute_f1(answer, reference)
+        
+        # 方法 2：嵌入相似度（推荐用于语义评估）
+        embedding_similarity = self._compute_embedding_similarity(answer, reference)
+        
+        # 方法 3：组合多个指标
+        # 权重可以根据任务调整
+        final_reward = (
+            f1_score * 0.4 +
+            embedding_similarity * 0.6
+        )
+        
+        return final_reward
+    
+    def _compute_f1(self, prediction: str, ground_truth: str) -> float:
+        """计算 F1 分数（Token 级别）"""
+        pred_tokens = set(prediction.lower().split())
+        truth_tokens = set(ground_truth.lower().split())
+        
+        if len(pred_tokens) == 0 or len(truth_tokens) == 0:
+            return 0.0
+        
+        common = pred_tokens & truth_tokens
+        if len(common) == 0:
+            return 0.0
+        
+        precision = len(common) / len(pred_tokens)
+        recall = len(common) / len(truth_tokens)
+        f1 = 2 * precision * recall / (precision + recall)
+        
+        return f1
+    
+    def _compute_embedding_similarity(
+        self,
+        answer: str,
+        reference: str
+    ) -> float:
+        """计算语义相似度（使用嵌入模型）"""
+        try:
+            # 获取嵌入
+            answer_emb = self.embedding_client.embeddings.create(
+                input=answer,
+                model="text-embedding-ada-002"
+            ).data[0].embedding
+            
+            reference_emb = self.embedding_client.embeddings.create(
+                input=reference,
+                model="text-embedding-ada-002"
+            ).data[0].embedding
+            
+            # 计算余弦相似度
+            similarity = np.dot(answer_emb, reference_emb) / (
+                np.linalg.norm(answer_emb) * np.linalg.norm(reference_emb)
+            )
+            
+            # 归一化到 0-1
+            return (similarity + 1) / 2
+        except Exception as e:
+            # 如果嵌入 API 失败，回退到 F1 分数
+            return self._compute_f1(answer, reference)
+
+# 配置 GRPO 训练
+config = {
+    "algorithm": {
+        "adv_estimator": "grpo",
+        "use_kl_in_reward": False,
+    },
+    "actor_rollout_ref": {
+        "rollout": {
+            "n": 4,  # GRPO 组大小
+        },
+        # ... 其他配置
+    }
+}
+
+# 启动训练
+agent = OpenEndedQAAgent()
+algorithm = agl.VERL(config)
+trainer = agl.Trainer(n_runners=10, algorithm=algorithm)
+trainer.fit(agent, train_dataset=train_data, val_dataset=val_data)
+```
+
+**关键要点**：
+
+1. **避免使用 LLM-as-a-Judge 在 GRPO 训练中**：
+   - LLM 调用成本高、速度慢
+   - 可能引入不稳定性和偏差
+   - 推荐用于 APO 或训练后评估
+
+2. **推荐使用确定性评估方法**：
+   - **F1 分数**：适合问答、文本匹配任务
+   - **嵌入相似度**：适合语义评估，速度相对快
+   - **ROUGE/BLEU**：适合摘要、翻译任务
+   - **组合指标**：结合多个指标获得更全面的评估
+
+3. **性能考虑**：
+   - 嵌入 API 调用可以批量处理以提高速度
+   - 可以缓存常用参考答案的嵌入
+   - 对于极大规模训练，考虑本地部署嵌入模型
+
+4. **如果确实需要 LLM-as-a-Judge**：
+   - 考虑先用确定性方法筛选，再用 LLM 评估前 N% 的样本
+   - 或者训练一个小型判别器模型代替 LLM
+   - 或者在 APO 阶段使用，而不是 GRPO 阶段
+
 ---
 
 ## 训练亮点总结
