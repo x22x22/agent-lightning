@@ -118,6 +118,20 @@ The `"main_llm"` resource key is a convention between the agent and [VERL][agent
 2. **Context-aware access** – Use [`get_base_url`][agentlightning.ProxyLLM.get_base_url] with [`rollout.rollout_id`][agentlightning.Rollout.rollout_id] and [`rollout.attempt.attempt_id`][agentlightning.Attempt.attempt_id].
    This approach enables per-caller trace attribution, improving trace collection per rollout or attempt when runner-side tracers are unavailable. For details, see [Working with Traces](../tutorials/traces.md).
 
+## Training Dataset Strategy and RL Highlights
+
+- **Dataset flow** – Both train and validation sets are simple Python dicts (`List[Dict[str, Any]]`) that the [`Trainer`][agentlightning.Trainer] pushes into the [`LightningStore`][agentlightning.LightningStore] as [rollouts][agentlightning.Rollout]. Each rollout is pulled by runners, executed by the agent, and streamed back to the algorithm as traces plus rewards.
+- **Reinforcement learning first** – This tutorial optimizes the agent with [VERL][agentlightning.algorithm.verl.VERL] using **GRPO** (Group Relative Policy Optimization). The algorithm reads traces, converts them to `(prompt, response, reward)` triplets, and trains the policy without requiring manual gradient code.
+- **Selective agent tuning** – Multi-node graphs can contain several agents; `agent_match` lets you target only the spans from specific nodes (e.g., `write_query|rewrite_query`) so you can focus compute on the behaviors that matter.
+- **Low-touch instrumentation** – The tracer and the VERL LLM proxy capture prompts, tool calls, and rewards automatically, so you rarely need to modify the agent beyond adding a `rollout` method and optional `emit_*` helpers.
+
+### SQL-Specific Recipe at a Glance
+
+- **Dataset** – Spider questions + schemas + ground-truth SQL are converted to Parquet (`train_spider.parquet`, `test_dev_500.parquet`, `test_dev.parquet`) and loaded into the store via [`Trainer.fit`][agentlightning.Trainer.fit].
+- **Loop** – The LangGraph agent iterates `write → execute → check → rewrite` until success or `max_turns` is hit.
+- **Reward** – `evaluate_query` runs the model’s SQL against the database and compares execution results with the golden query; equivalence yields a high reward, failures yield low or zero.
+- **RL signal path** – The numeric reward returned from `rollout` is forwarded to VERL, which applies GRPO over groups of rollouts (group size = `actor_rollout_ref.rollout.n`; see [Configuring VERL for Reinforcement Learning](#configuring-verl-for-reinforcement-learning)) to update the policy.
+
 ## Reward Signal and Evaluation
 
 The `evaluate_query` function provides the reward mechanism for RL training. In agent training, obtaining a consistent and meaningful reward signal is often challenging. Fortunately, this is simplified when using the [**Spider dataset**](https://yale-lily.github.io/spider). The dataset includes ~8k samples containing natural-language questions, database schemas, and ground-truth SQL queries.
@@ -207,6 +221,28 @@ python3 -m verl.trainer.main_ppo \
 
 !!! warning
     We used to provide a CLI called `python -m agentlightning.verl` to launch training in v0.1. This is no longer the recommended approach. Instead, use [`agl.Trainer`][agentlightning.Trainer] to run VERL and agent runners together, or follow the [debugging tutorial](../tutorials/debug.md) if you want an isolated experience similar to v0.1.
+
+## GRPO Training Dataset and Reward Design (Including Open-Ended Tasks)
+
+GRPO consumes batches of rollouts grouped by `actor_rollout_ref.rollout.n` (e.g., 4) and compares candidates within the group. Each rollout in the group uses the same prompt/task but a different sampled response. Rewards are attached per rollout and VERL propagates the final scalar to all triplets in the trajectory.
+
+**Reward patterns that work well:**
+
+- **Deterministic executors** – For SQL (Spider), reuse `evaluate_query` to mark execution equivalence. For tool-using agents, check whether the tool results satisfy constraints.
+- **Structured outputs** – Validate JSON/YAML against a schema and award partial credit for well-formed but semantically incomplete outputs.
+- **Open-ended answers** – Use an LLM judge with a strict rubric (provide the prompt, the model’s answer, optional references, and scoring rules) and map the judge score to `[0, 1]`. Clamp or discard low-confidence judgments based on the judge’s self-reported confidence.
+- **Self-consistency or majority voting** – When no ground truth exists, sample multiple candidates, have a judge pick the best, and assign +1 to the winner and 0 (or a small penalty) to others in the group; GRPO’s relative advantages benefit from this structure.
+- **Safety/format gates** – Apply negative rewards for unsafe content, SQL injection patterns, or invalid formats before scoring semantic correctness. This keeps training stable by filtering obviously bad traces.
+
+For open-ended QA tasks, a lightweight judge prompt typically includes:
+
+- the task definition and acceptance criteria,
+- optional references or exemplar answers,
+- a 0–1 scoring scale with named anchors (e.g., 1.0 = fully correct, 0.5 = partially correct, 0.0 = incorrect/off-topic),
+- a short rationale field to debug grading drift.
+
+The numeric score becomes the rollout reward with optional temperature-based smoothing (e.g., `reward = max(0.0, min(1.0, score))`).
+
 ## Orchestrating Training with [`Trainer`][agentlightning.Trainer]
 
 [`Trainer`][agentlightning.Trainer] is the high-level orchestrator that integrates the agent, algorithm, dataset, and distributed runners. The key benefits of using the [`Trainer`][agentlightning.Trainer] are:
