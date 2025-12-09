@@ -554,6 +554,13 @@ Training Qwen-2.5-Coder-1.5B-Instruct on Spider dataset:
 
 ## Open-Ended Answer Scenarios
 
+!!! note "About the Strategies in This Section"
+    This section presents multiple reward function design strategies that can be used for open-ended answer scenarios. **Important notes**:
+    
+    - **GRPO training examples in the project** (SQL, Calc-X, RAG) all use **deterministic evaluation** methods (execution result matching, mathematical equivalence checking, F1 scores, etc.) that compute rewards in real-time during training.
+    - **LLM-as-a-Judge** strategy has actual implementation in the project's **APO (Automatic Prompt Optimization) example** (`examples/apo/apo_custom_algorithm.py`), where it evaluates prompt quality during training.
+    - Other strategies in this section (embedding similarity, multi-metric combinations, human feedback, etc.) are **recommended design approaches** that can be flexibly adopted based on specific task requirements.
+
 ### Challenges with Open-Ended Answers
 
 Open-ended answer scenarios (Q&A, summarization, creative writing) are harder to evaluate than closed-form tasks (SQL, code generation):
@@ -564,6 +571,9 @@ Open-ended answer scenarios (Q&A, summarization, creative writing) are harder to
 4. **Context Dependence**: Correctness depends on context
 
 ### Strategy 1: LLM-as-a-Judge
+
+!!! example "Project Implementation"
+    This strategy has actual implementation in `examples/apo/apo_custom_algorithm.py`. The example uses an LLM to evaluate generated text quality **during APO training**. Note this is for APO (prompt optimization), not GRPO training.
 
 Use another LLM to evaluate answer quality:
 
